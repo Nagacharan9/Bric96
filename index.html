@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Trade Signal</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --card: #111118;
+    --border: #1e1e2e;
+    --text: #e0e0f0;
+    --muted: #555570;
+    --buy: #00e676;
+    --sell: #ff3d57;
+    --buy-glow: rgba(0,230,118,0.25);
+    --sell-glow: rgba(255,61,87,0.25);
+    --idle-glow: rgba(100,100,160,0.1);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  /* Ambient background blob */
+  .blob {
+    position: fixed;
+    width: 600px; height: 600px;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.12;
+    pointer-events: none;
+    transition: background 1s ease;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #5555aa;
+    z-index: 0;
+  }
+
+  .wrapper {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+    width: 100%;
+    padding: 24px;
+  }
+
+  /* TOP STATUS BAR */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 8px 20px;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.4s;
+  }
+  .dot.connected { background: var(--buy); box-shadow: 0 0 8px var(--buy); animation: pulse 2s infinite; }
+  .dot.disconnected { background: var(--sell); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* PAIR LABEL */
+  .pair-label {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 22px;
+    letter-spacing: 4px;
+    color: var(--muted);
+    transition: color 0.5s;
+  }
+
+  /* MAIN SIGNAL CARD */
+  .signal-card {
+    width: min(420px, 92vw);
+    aspect-ratio: 1 / 0.9;
+    border-radius: 28px;
+    border: 1.5px solid var(--border);
+    background: var(--card);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.5s, box-shadow 0.5s;
+    box-shadow: 0 0 60px var(--idle-glow);
+  }
+
+  .signal-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,0.03), transparent 70%);
+    pointer-events: none;
+  }
+
+  .signal-card.buy {
+    border-color: var(--buy);
+    box-shadow: 0 0 80px var(--buy-glow), inset 0 0 40px rgba(0,230,118,0.05);
+  }
+  .signal-card.sell {
+    border-color: var(--sell);
+    box-shadow: 0 0 80px var(--sell-glow), inset 0 0 40px rgba(255,61,87,0.05);
+  }
+
+  /* SIGNAL TEXT */
+  .signal-text {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(80px, 22vw, 140px);
+    line-height: 1;
+    letter-spacing: 6px;
+    color: var(--muted);
+    transition: color 0.4s, transform 0.3s;
+    user-select: none;
+  }
+  .signal-card.buy .signal-text { color: var(--buy); text-shadow: 0 0 40px var(--buy-glow); transform: scale(1.04); }
+  .signal-card.sell .signal-text { color: var(--sell); text-shadow: 0 0 40px var(--sell-glow); transform: scale(1.04); }
+
+  /* ARROW */
+  .arrow {
+    font-size: 42px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.4s, transform 0.4s;
+  }
+  .signal-card.buy .arrow, .signal-card.sell .arrow {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* WAITING TEXT */
+  .waiting-text {
+    position: absolute;
+    bottom: 22px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    opacity: 1;
+    transition: opacity 0.3s;
+  }
+  .signal-card.buy .waiting-text,
+  .signal-card.sell .waiting-text { opacity: 0; }
+
+  /* FLASH ANIMATION */
+  @keyframes flashIn {
+    0% { opacity: 0; transform: scale(0.88); }
+    60% { opacity: 1; transform: scale(1.06); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .flash { animation: flashIn 0.35s cubic-bezier(0.22,1,0.36,1) both; }
+
+  /* BOTTOM INFO */
+  .info-row {
+    display: flex;
+    gap: 16px;
+  }
+  .info-chip {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 6px 16px;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+
+  /* SERVER URL INPUT */
+  .config-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: min(420px, 92vw);
+  }
+  .config-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .config-row {
+    display: flex;
+    width: 100%;
+    gap: 8px;
+  }
+  .config-input {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    transition: border-color 0.3s;
+  }
+  .config-input:focus { border-color: #5555aa; }
+  .config-btn {
+    background: #222235;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 18px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .config-btn:hover { background: #2e2e4a; }
+</style>
+</head>
+<body>
+
+<div class="blob" id="blob"></div>
+
+<div class="wrapper">
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <div class="dot disconnected" id="dot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+
+  <!-- Pair name -->
+  <div class="pair-label" id="pairLabel">WAITING</div>
+
+  <!-- Main card -->
+  <div class="signal-card" id="card">
+    <div class="signal-text" id="signalText">—</div>
+    <div class="arrow" id="arrow"></div>
+    <div class="waiting-text">Waiting for signal</div>
+  </div>
+
+  <!-- Info chips -->
+  <div class="info-row">
+    <div class="info-chip" id="timeChip">No signal yet</div>
+    <div class="info-chip">1 Screen Mode ✅</div>
+  </div>
+
+  <!-- Server URL config -->
+  <div class="config-box">
+    <div class="config-label">Your Render Server URL</div>
+    <div class="config-row">
+      <input class="config-input" id="serverUrl" type="text" placeholder="https://your-app.onrender.com" />
+      <button class="config-btn" onclick="connectToServer()">Connect</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let socket = null;
+
+  function connectToServer() {
+    const url = document.getElementById('serverUrl').value.trim();
+    if (!url) { alert('Please paste your Render URL first!'); return; }
+
+    // Save URL
+    localStorage.setItem('serverUrl', url);
+
+    if (socket) socket.disconnect();
+
+    setStatus('connecting');
+
+    socket = io(url, { transports: ['websocket', 'polling'] });
+
+    socket.on('connect', () => {
+      setStatus('connected');
+      console.log('✅ Connected to server');
+    });
+
+    socket.on('disconnect', () => {
+      setStatus('disconnected');
+    });
+
+    socket.on('signal', (data) => {
+      showSignal(data.signal, data.pair || 'SIGNAL');
+    });
+  }
+
+  function setStatus(state) {
+    const dot = document.getElementById('dot');
+    const txt = document.getElementById('statusText');
+    dot.className = 'dot';
+    if (state === 'connected') {
+      dot.classList.add('connected');
+      txt.textContent = 'Live — Connected';
+    } else if (state === 'disconnected') {
+      dot.classList.add('disconnected');
+      txt.textContent = 'Disconnected';
+    } else {
+      txt.textContent = 'Connecting...';
+    }
+  }
+
+  function showSignal(signal, pair) {
+    const card = document.getElementById('card');
+    const signalText = document.getElementById('signalText');
+    const arrow = document.getElementById('arrow');
+    const blob = document.getElementById('blob');
+    const pairLabel = document.getElementById('pairLabel');
+    const timeChip = document.getElementById('timeChip');
+
+    // Remove old classes
+    card.classList.remove('buy', 'sell', 'flash');
+
+    // Force reflow for animation restart
+    void card.offsetWidth;
+
+    signal = signal.toUpperCase();
+    const isBuy = signal === 'BUY';
+
+    card.classList.add(isBuy ? 'buy' : 'sell', 'flash');
+    signalText.textContent = signal;
+    arrow.textContent = isBuy ? '▲' : '▼';
+    blob.style.background = isBuy ? '#00e676' : '#ff3d57';
+    pairLabel.textContent = pair.toUpperCase();
+    pairLabel.style.color = isBuy ? '#00e676' : '#ff3d57';
+
+    // Time chip
+    const now = new Date();
+    timeChip.textContent = `Signal at ${now.toLocaleTimeString()}`;
+  }
+
+  // Auto-load saved URL
+  window.onload = () => {
+    const saved = localStorage.getItem('serverUrl');
+    if (saved) {
+      document.getElementById('serverUrl').value = saved;
+      connectToServer();
+    }
+  };
+</script>
+</body>
+</html>
